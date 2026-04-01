@@ -4804,7 +4804,7 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 		go saveData()
 
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ %d-qism %d-o'ringa surildi!", fromIdx, toIdx)))
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅%d-qism %d-o'ringa surildi!", fromIdx, toIdx)))
 
 		delete(adminState, userID)
 		delete(animeCodeTemp, userID)
@@ -5017,6 +5017,7 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		delete(animeCodeTemp, userID)
 		adminMutex.Unlock()
 		return
+
 	case "remove_admin_id":
 		remID, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
@@ -5477,7 +5478,6 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		bot.Send(msg)
 
 	case "wait_btn_text":
-		// 1. Tugma matnini saqlaymiz
 		if userAdData[userID] == nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Xatolik yuz berdi, qaytadan boshlang."))
 			adminState[userID] = "wait_media"
@@ -5485,34 +5485,32 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		}
 		userAdData[userID].ButtonText = text
 
-		// 2. Link so'rash bosqichiga o'tamiz
+		// Endi link emas, anime kodini so'raymiz
 		adminState[userID] = "wait_ad_link"
-		bot.Send(tgbotapi.NewMessage(chatID, "🔗 Tugma linkini yuboring (https://...):"))
-
+		bot.Send(tgbotapi.NewMessage(chatID, "Anime kodini kiriting (masalan: 1):"))
 	case "wait_ad_link":
-		link := strings.TrimSpace(text)
+		// 1. Kiruvchi matnni tozalash (bu anime kodi bo'ladi)
+		code := strings.TrimSpace(text)
 
-		// Link formati tekshiruvi
-		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
-			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ eslatma ! \nIltimos, linkni to'liq holda yuboring (masalan: https://t.me/...)"))
-			return
-		}
-
+		// 2. Ma'lumotlar xotirada borligini tekshirish
 		if userAdData[userID] == nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ma'lumotlar topilmadi, qaytadan boshlang."))
+			adminState[userID] = "wait_media" // Xato bo'lsa boshiga qaytaradi
 			return
 		}
 
-		// Linkni saqlaymiz
-		userAdData[userID].AdLink = link
+		// 3. Kodni avtomatik linkka aylantirish va saqlash
+		fullLink := "https://t.me/ergergtr_bot?start=" + code
+		userAdData[userID].AdLink = fullLink
 
-		// 3. Kanallar ro'yxatini chiqaramiz
+		// 4. Kanallar borligini tekshirish
 		if len(promoChannels) == 0 {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Kanallar ro'yxati bo'sh. Avval kanal qo'shing."))
 			delete(adminState, userID)
 			return
 		}
 
+		// 5. Kanallar tugmalarini generatsiya qilish
 		var rows [][]tgbotapi.KeyboardButton
 		for name := range promoChannels {
 			rows = append(rows, tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(name)))
@@ -5521,11 +5519,14 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		keyboard := tgbotapi.NewReplyKeyboard(rows...)
 		keyboard.ResizeKeyboard = true
 
-		adminState[userID] = "wait_select_channel" // MUHIM: Endi kanal tanlashni kutamiz
-		msg := tgbotapi.NewMessage(chatID, "📢 Reklama tayyor! Qaysi kanalga yuborasiz?")
+		// 6. Keyingi holatga o'tkazish
+		adminState[userID] = "wait_select_channel"
+
+		// 7. Admin uchun tasdiqlash xabari va klaviatura
+		successMsg := fmt.Sprintf("✅ Kod qabul qilindi: %s\n🔗 Tayyor link: %s\n\n📢 Endi reklamani yuborish uchun kanalni tanlang:", code, fullLink)
+		msg := tgbotapi.NewMessage(chatID, successMsg)
 		msg.ReplyMarkup = keyboard
 		bot.Send(msg)
-
 	case "wait_select_channel":
 		// Tanlangan kanalni tekshiramiz
 		channelID, ok := promoChannels[text]
@@ -5615,7 +5616,7 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 			}
 		}
 		// Agar 'adminState' o'rnatilgan bo'lsa, lekin 'case' mos kelmasa
-		bot.Send(tgbotapi.NewMessage(chatID, "❓ Noma'lum holat! Iltimos, qayta urining yoki /admin deb yozing."))
+		bot.Send(tgbotapi.NewMessage(chatID, "❓ Noma'lum holat! Iltimos, qayta urining yoki /ad deb yozing."))
 		delete(adminState, userID) // Noto'g'ri holatni tozalash
 		return
 	}
