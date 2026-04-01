@@ -22,7 +22,19 @@ var BOT_TOKEN = "8739352086:AAFfzqHoZUYkR0nhqj4F9zDNTBGfOnXiqKs"
 
 //var BOT_TOKEN = "8445344788:AAG7YjdEYulqT2TyVTL_bczpBUuhdm7TwZo"
 
-//var BOT_TOKEN = "8671204523:AAGmiKg1M8MvxdvwGW1Pp-LC7IK-ezwC8xA"
+// var BOT_TOKEN = "8671204523:AAGmiKg1M8MvxdvwGW1Pp-LC7IK-ezwC8xA"
+type AdData struct {
+	Step       int    // Qadam
+	HasMedia   bool   // Media bor/yo'qligi
+	FileID     string // Rasm yoki Video ID-si
+	IsVideo    bool   // Video ekanligi
+	Caption    string // Reklama matni (izohi)
+	ButtonText string // Tugma matni
+	AdLink     string // Tugma linki
+}
+
+// Mapni ham e'lon qilishni unutmang
+var userAdData = make(map[int64]*AdData)
 
 const (
 	MAIN_ADMIN_ID int64 = 6500476560
@@ -2191,45 +2203,56 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 			duration = 60 * 24 * time.Hour
 		case "1y":
 			duration = 365 * 24 * time.Hour
-		case "60m": // Agar bu 60 minut bo'lsa
+		case "60m":
 			duration = 60 * time.Minute
 		default:
 			duration = 30 * 24 * time.Hour
 		}
 
-		// VIP ma'lumotlarini yangilash
 		vipMutex.Lock()
+
 		if vipUsers == nil {
 			vipUsers = make(map[int64]VIPUser)
 		}
 
-		// Agar foydalanuvchi allaqachon VIP bo'lsa, muddatni hozirgi vaqtdan emas,
-		// eski tugash vaqtidan boshlab qo'shish mantiqiyroq bo'lishi mumkin.
-		// Lekin hozirgi kod yangidan muddat belgilaydi:
+		now := time.Now()
+		expire := now.Add(duration)
+
+		// Agar oldin VIP bo‘lsa va hali tugamagan bo‘lsa → ustiga qo‘shamiz
+		if oldVIP, ok := vipUsers[targetID]; ok {
+			if oldVIP.ExpireAt.After(now) {
+				expire = oldVIP.ExpireAt.Add(duration)
+			}
+		}
+
 		vipUsers[targetID] = VIPUser{
 			UserID:   targetID,
-			ExpireAt: time.Now().Add(duration),
+			ExpireAt: expire,
 		}
+
 		vipMutex.Unlock()
 
-		// Ma'lumotlarni JSON faylga saqlash (saveData ichida VIP qismi bo'lishi shart!)
+		// Faylga saqlash
 		go func() {
 			err := saveData()
 			if err != nil {
-				log.Printf("❌ Ma'lumotlarni saqlashda xato: %v", err)
+				log.Printf("❌ Saqlash xatosi: %v", err)
 			}
 		}()
 
-		// Admin panel holatini tozalash
 		adminMutex.Lock()
 		delete(adminState, userID)
 		adminMutex.Unlock()
 
-		// Tasdiqlash xabarini yuborish
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ ID: %d muvaffaqiyatli VIP qilindi!\n📅 Muddat: %s\n⌛ Tugash vaqti: %s",
-			targetID,
-			durationStr,
-			time.Now().Add(duration).Format("02.01.2006 15:04")))
+		msg := tgbotapi.NewMessage(
+			chatID,
+			fmt.Sprintf(
+				"✅ ID: %d muvaffaqiyatli VIP qilindi!\n📅 Muddat: %s\n⌛ Tugash vaqti: %s",
+				targetID,
+				durationStr,
+				expire.Format("02.01.2006 15:04"),
+			),
+		)
 
 		bot.Send(msg)
 		return
@@ -3423,7 +3446,6 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 }
 
-// Funksiyani main dan tashqarida e'lon qiling
 func showAnimeDeleteList(bot *tgbotapi.BotAPI, update tgbotapi.Update, chatID int64, userID int64, page int) {
 	const pageSize = 10
 	var animeCodes []string
@@ -3510,6 +3532,7 @@ func showAnimeDeleteList(bot *tgbotapi.BotAPI, update tgbotapi.Update, chatID in
 	adminState[userID] = "delete_anime_code_wait"
 	adminMutex.Unlock()
 }
+
 func buildReorderPaginationKeyboard(code string, page int, total int, perPage int) tgbotapi.InlineKeyboardMarkup {
 	var buttons []tgbotapi.InlineKeyboardButton
 
@@ -5286,20 +5309,20 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		go saveData()
 		return
 
-	//case "add_private_link":
-	//	link := update.Message.Text
-	//	if !strings.HasPrefix(link, "https://t.me/") {
-	//		bot.Send(tgbotapi.NewMessage(chatID, "❌ Noto'g'ri havola. Havola https://t.me/ bilan boshlanishi kerak."))
-	//		return
-	//	}
-	//
-	//	targetChatID := adminTempID[userID]
-	//	channels[targetChatID] = link // Maxfiy kanal uchun siz yuborgan havolani saqlaydi
-	//	go saveData()
-	//
-	//	bot.Send(tgbotapi.NewMessage(chatID, "✅ Maxfiy kanal va havola muvaffaqiyatli saqlandi!"))
-	//	adminState[userID] = ""
-	//	delete(adminTempID, userID)
+		//case "add_private_link":
+		//	link := update.Message.Text
+		//	if !strings.HasPrefix(link, "https://t.me/") {
+		//		bot.Send(tgbotapi.NewMessage(chatID, "❌ Noto'g'ri havola. Havola https://t.me/ bilan boshlanishi kerak."))
+		//		return
+		//	}
+		//
+		//	targetChatID := adminTempID[userID]
+		//	channels[targetChatID] = link // Maxfiy kanal uchun siz yuborgan havolani saqlaydi
+		//	go saveData()
+		//
+		//	bot.Send(tgbotapi.NewMessage(chatID, "✅ Maxfiy kanal va havola muvaffaqiyatli saqlandi!"))
+		//	adminState[userID] = ""
+		//	delete(adminTempID, userID)
 
 	case "edit_anime_code":
 		code := strings.ToLower(strings.TrimSpace(text))
@@ -5333,9 +5356,9 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		delete(adminState, userID)
 		bot.Send(msg)
 		return // ------------------ ADMIN: kontent qabul qilish (TO'G'RILANGAN) ------------------
-	// handleAdminText funksiyasi ichidagi switch blokiga qo'shiladi
+		// handleAdminText funksiyasi ichidagi switch blokiga qo'shiladi
 
-	// handleAdminText funksiyasi ichidagi switch blokida "anime_videos" holatining yangilangan qismi:
+		// handleAdminText funksiyasi ichidagi switch blokida "anime_videos" holatining yangilangan qismi:
 	case "anime_videos":
 		code := animeCodeTemp[userID]
 		chatID := update.Message.Chat.ID
@@ -5616,24 +5639,12 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 			}
 		}
 		// Agar 'adminState' o'rnatilgan bo'lsa, lekin 'case' mos kelmasa
-		bot.Send(tgbotapi.NewMessage(chatID, "❓ Noma'lum holat! Iltimos, qayta urining yoki /ad deb yozing."))
+		bot.Send(tgbotapi.NewMessage(chatID, "❓ Noma'lum holat! Iltimos, qayta urining yoki /admin deb yozing."))
 		delete(adminState, userID) // Noto'g'ri holatni tozalash
 		return
 	}
 
 }
-
-type AdData struct {
-	FileID     string
-	IsVideo    bool
-	HasMedia   bool
-	Caption    string
-	ButtonText string
-	AdLink     string
-}
-
-// Foydalanuvchi kiritayotgan reklama ma'lumotlarini vaqtincha saqlaydi
-var userAdData = make(map[int64]*AdData)
 
 func getCancelMenu() tgbotapi.ReplyKeyboardMarkup {
 	return tgbotapi.NewReplyKeyboard(
@@ -5642,6 +5653,7 @@ func getCancelMenu() tgbotapi.ReplyKeyboardMarkup {
 		),
 	)
 }
+
 func initQueue(bot *tgbotapi.BotAPI) {
 	go processQueue(bot)
 }
