@@ -18,23 +18,8 @@ import (
 	"time"
 )
 
+// var BOT_TOKEN = "8534860816:AAFBHUNrd7iRqHzY5uXN8LQeb3k8IpbLhUw"
 var BOT_TOKEN = "8739352086:AAFfzqHoZUYkR0nhqj4F9zDNTBGfOnXiqKs"
-
-//var BOT_TOKEN = "8445344788:AAG7YjdEYulqT2TyVTL_bczpBUuhdm7TwZo"
-
-// var BOT_TOKEN = "8671204523:AAGmiKg1M8MvxdvwGW1Pp-LC7IK-ezwC8xA"
-type AdData struct {
-	Step       int    // Qadam
-	HasMedia   bool   // Media bor/yo'qligi
-	FileID     string // Rasm yoki Video ID-si
-	IsVideo    bool   // Video ekanligi
-	Caption    string // Reklama matni (izohi)
-	ButtonText string // Tugma matni
-	AdLink     string // Tugma linki
-}
-
-// Mapni ham e'lon qilishni unutmang
-var userAdData = make(map[int64]*AdData)
 
 const (
 	MAIN_ADMIN_ID int64 = 6500476560
@@ -82,19 +67,16 @@ type UserPage struct {
 	Page  int
 }
 
-// Admin konfiguratsiyasi
-type AdminConfig struct {
-	Admins        map[int64]bool      `json:"Admins"`
-	Channels      map[int64]string    `json:"Channels"`
-	ChannelLimits map[int64]int       `json:"ChannelLimits"` // Yangi: Limit soni
-	ChannelStats  map[int64]int       `json:"ChannelStats"`  // Yangi: Amaldagi soni
-	AllUsers      map[int64]time.Time `json:"AllUsers"`
-	VIPUsers      map[int64]VIPUser   `json:"vip_users"` // SHUNI QO'SHING
-}
 type VIPUser struct {
 	UserID   int64
 	ExpireAt time.Time
 }
+
+// ====== VIP foydalanuvchilar
+var (
+	vipUsers map[int64]VIPUser
+	vipMutex sync.RWMutex
+)
 
 const vipPerPage = 5
 
@@ -116,6 +98,9 @@ var (
 	requestMutex    sync.RWMutex
 	userJoined      = make(map[int64]time.Time) // foydalanuvchilar qo‘shilgan vaqt
 	userActive      = make(map[int64]time.Time) // foydalanuvchilar oxirgi faoliyat
+)
+var (
+	blockMutex sync.RWMutex // <-- Mana shu qator yetishmayapti
 )
 
 // Rejalashtirilgan post strukturasi
@@ -147,11 +132,6 @@ var userMenu = tgbotapi.NewReplyKeyboard(
 	),
 )
 
-type AnimeItem struct {
-	Link string `json:"link"`
-	Kind string `json:"kind"` // Bu yerda 'Kind' (video yoki subtitr turi) saqlanadi
-}
-
 // ====== Adminlar bilan ishlash
 var (
 	adminIDs          = map[int64]bool{MAIN_ADMIN_ID: true}
@@ -177,12 +157,9 @@ var (
 	uploadQueue    = make(chan UploadTask, 1000)
 	broadcastCache = make(map[int64]*tgbotapi.Message)
 )
-
-// ====== VIP foydalanuvchilar
-var (
-	vipUsers map[int64]VIPUser
-	vipMutex sync.RWMutex
-)
+var currentUserID int64
+var isAdmin bool
+var isVipActive bool
 var animePhotoMap = make(map[string]string) // code -> fileID
 // ====== Kanallar
 var channels = make(map[int64]string) // channelID → channelUsername yoki info
@@ -193,6 +170,18 @@ type Config struct {
 	Channels map[string]string `json:"Channels"`
 	AllUsers map[string]string `json:"AllUsers"`
 }
+type AdData struct {
+	FileID     string
+	IsVideo    bool
+	HasMedia   bool
+	Caption    string
+	ButtonText string
+	AdLink     string
+	ButtonURL  string // <-- Mana shu qator bo'lishi shart
+}
+
+// 77789455132-+i kiritayotg9*/r// eklama ma'lumotlarini vaqtincha saqlaydi
+var userAdData = make(map[int64]*AdData)
 
 func main() {
 	// ⚡ Bot ma'lumotlarini yuklash
@@ -234,33 +223,32 @@ func main() {
 
 	// FAQAT BITTA FOR TSIKLI BO'LISHI SHART!
 	for update := range updates {
-		// 1️⃣ Kanalga so'rov yuborilsa (Join Request)
+		// 1️⃣ KANALGA SO'ROV YUBORILSA (JOIN REQUEST)
 		if update.ChatJoinRequest != nil {
 			uID := update.ChatJoinRequest.From.ID
 			cID := update.ChatJoinRequest.Chat.ID
 
-			requestMutex.Lock() // Maplar bilan ishlayotganda bloklaymiz
-
-			// --- 1. STATISTIKANI OSHIRISH ---
+			requestMutex.Lock()
+			// --- 1. Statistikani oshirish ---
 			if channelStats == nil {
 				channelStats = make(map[int64]int)
 			}
 			channelStats[cID]++
 
-			// --- 2. LIMITNI TEKSHIRISH VA O'CHIRISH ---
+			// --- 2. Limitni tekshirish va kanalni o'chirish ---
 			if limit, exists := channelLimits[cID]; exists {
 				if channelStats[cID] >= limit {
 					delete(channels, cID)      // Majburiy obunadan o'chirish
-					delete(channelLimits, cID) // Limitini o'chirish
+					delete(channelLimits, cID) // Limitni o'chirish
 					log.Printf("🚫 [LIMIT TO'LDI] Kanal %d o'chirildi (Limit: %d)", cID, limit)
 
-					// Adminga xabar berish (Admin ID ni yozing)
+					// Adminga bildirishnoma yuborish
 					msg := tgbotapi.NewMessage(MAIN_ADMIN_ID, fmt.Sprintf("📢 Kanalda limit to'ldi va u o'chirildi!\nID: %d\nLimit: %d", cID, limit))
 					bot.Send(msg)
 				}
 			}
 
-			// --- 3. SO'ROVNI RO'YXATGA OLISH (Sizning kodingiz) ---
+			// --- 3. So'rovni ro'yxatga olish ---
 			if pendingRequests == nil {
 				pendingRequests = make(map[int64]map[int64]bool)
 			}
@@ -268,54 +256,84 @@ func main() {
 				pendingRequests[uID] = make(map[int64]bool)
 			}
 			pendingRequests[uID][cID] = true
+			requestMutex.Unlock()
 
-			requestMutex.Unlock() // Ish bitgach ochamiz
-
-			saveRequests() // So'rovlarni saqlash
-			saveData()     // Kanal o'chgan bo'lsa, kanallar ro'yxatini ham saqlash
+			saveRequests() // So'rovlarni faylga saqlash
+			saveData()     // Kanal ro'yxati o'zgargani uchun konfigni saqlash
 
 			log.Printf("📥 [JOIN REQUEST] Foydalanuvchi %d, %d kanalga so'rov yubordi (Stat: %d)", uID, cID, channelStats[cID])
 			continue
 		}
-		// Foydalanuvchi ID sini aniqlash (Message yoki CallbackQuery dan)
+		var uID int64
+		if update.Message != nil {
+			uID = update.Message.From.ID
+		} else if update.CallbackQuery != nil {
+			uID = update.CallbackQuery.From.ID
+		} else if update.ChatJoinRequest != nil {
+			uID = update.ChatJoinRequest.From.ID
+		}
+		// 2. 🛡️ BLOK TEKSHIRUVI (Hamma narsadan oldin)
+		blockMutex.RLock()
+		isBlocked := blockedUsers[uID]
+		blockMutex.RUnlock()
+
+		if isBlocked {
+			// Bloklangan bo'lsa, log yozamiz va 'continue' orqali siklni to'xtatamiz
+			log.Printf("🚫 [BLOK] %d ID li foydalanuvchi botni ishlatishga urindi.", uID)
+			continue // <--- MUHIM: Pastdagi kodlar (handleUpdate, handleMessage) ishlamaydi
+		}
+		// 2️⃣ ID ANIQLASH
 		var currentUserID int64
 		if update.Message != nil {
 			currentUserID = update.Message.From.ID
+			log.Printf("📩 [XABAR] User: %d, Text: %s", currentUserID, update.Message.Text)
 		} else if update.CallbackQuery != nil {
 			currentUserID = update.CallbackQuery.From.ID
+			log.Printf("🔘 [CALLBACK] User: %d, Data: %s", currentUserID, update.CallbackQuery.Data)
 		} else {
-			continue // Boshqa turdagi update bo'lsa o'tkazib yuboramiz
+			continue
 		}
 
-		// 💎 VIP tugmasi (HAR DOIM ishlaydi)
+		// 3️⃣ ADMIN VA VIP TEKSHIRUVI (TERMINALDA KO'RISH UCHUN)
+		isAdmin := adminIDs[currentUserID]
+
+		vipMutex.RLock()
+		vUser, isVipExists := vipUsers[currentUserID]
+		vipMutex.RUnlock()
+
+		isVipActive := isVipExists && time.Now().Before(vUser.ExpireAt)
+
+		// 🔥 MANA BU LOG ENG MUHIMI:
+		log.Printf("🔍 [TEKSHIRUV] User: %d | Admin: %v | VIP_Bazada: %v | VIP_Aktiv: %v",
+			currentUserID, isAdmin, isVipExists, isVipActive)
+
+		// 💎 VIP TUGMASI
 		if update.CallbackQuery != nil && update.CallbackQuery.Data == "vip" {
+			log.Printf("💎 [VIP TUGMA] User %d VIP menyuni ochdi", currentUserID)
 			showVIP(bot, update.CallbackQuery.Message.Chat.ID)
 			continue
 		}
 
-		// 2️⃣ "Tekshirish" tugmasi bosilganda
-		if update.CallbackQuery != nil && update.CallbackQuery.Data == "check_sub" {
-			isOk, missing := checkMembership(bot, currentUserID, true)
-			if isOk {
-				bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "✅ Tasdiqlandi!"))
-				bot.Send(tgbotapi.NewDeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID))
-				bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "✅ Rahmat! Endi botdan foydalanishingiz mumkin. /start bosing."))
-			} else {
-				bot.Request(tgbotapi.NewCallbackWithAlert(update.CallbackQuery.ID, "❌ Siz hali barcha kanallarga so'rov yubormagansiz!"))
-				handleMembershipCheck(bot, update.CallbackQuery.Message.Chat.ID, missing)
-			}
+		// 4️⃣ ADMIN YOKI VIP BO'LSA - O'TKAZIB YUBORISH
+		if isAdmin || isVipActive {
+			log.Printf("✅ [RUXSAT] User %d imtiyozli (Admin/VIP), obuna tekshirilmadi.", currentUserID)
+			go handleUpdate(bot, update)
 			continue
 		}
-		// 3️⃣ ASOSIY FILTR: Har qanday xabar kelganda birinchi bo'lib tekshiramiz
+
+		// 5️⃣ ODDDIY FOYDALANUVCHILARNI TEKSHIRISH
+		log.Printf("🛡️ [OBUNA] User %d oddiy foydalanuvchi, obuna tekshirilmoqda...", currentUserID)
 		isOk, missing := checkMembership(bot, currentUserID, false)
+
 		if !isOk {
-			// Agar admin bo'lsa, tekshiruvsiz o'tkazish mumkin (ixtiyoriy)
+			log.Printf("❌ [RAD] User %d obuna bo'lmagan. Tugmalar yuborildi.", currentUserID)
 			handleMembershipCheck(bot, currentUserID, missing)
-			continue // Botning qolgan qismi ishlamaydi!
+			continue
 		}
 
-		// 4️⃣ Agar hamma narsa OK bo'lsa, botning qolgan mantiqi ishlaydi
+		log.Printf("🔓 [OK] User %d barcha kanallarga a'zo.", currentUserID)
 		go handleUpdate(bot, update)
+
 	}
 }
 
@@ -323,52 +341,52 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	var userID int64
 	var chatID int64
 	var text string
+
+	// 1. Ma'lumotlarni xavfsiz olish
 	if update.Message != nil {
 		userID = update.Message.From.ID
 		chatID = update.Message.Chat.ID
-		text = update.Message.Text // <--- MATNNI SHU YERDA YUKLASH KERAK!
+		text = update.Message.Text
 	} else if update.CallbackQuery != nil {
 		userID = update.CallbackQuery.From.ID
-		// CallbackQuery'da xabar bo'lmasligi ehtimolini tekshiramiz
 		if update.CallbackQuery.Message != nil {
 			chatID = update.CallbackQuery.Message.Chat.ID
 		}
-		text = update.CallbackQuery.Data // Callback datani matn sifatida olish mumkin
+		text = update.CallbackQuery.Data
 	} else {
 		return
 	}
 
+	// 2. Admin holatini (state) olish
 	adminMutex.Lock()
 	state := adminState[userID]
 	adminMutex.Unlock()
 
-	// --- YANGI QISM: Rasm qabul qilish ---
+	// 3. Rasm qabul qilish (Muqova uchun)
 	if update.Message != nil && update.Message.Photo != nil {
-		// Holatni tekshiramiz
 		if state == "edit_anime_photo_waiting" || state == "anime_photo" {
 			photos := update.Message.Photo
-			photo := photos[len(photos)-1] // Eng sifatli rasm
+			photo := photos[len(photos)-1]
 			code := animeCodeTemp[userID]
 
-			// 1. Rasmni saqlash (Mutex bilan)
 			infoMutex.Lock()
 			if animePhotos == nil {
 				animePhotos = make(map[string]string)
 			}
 			animePhotos[code] = photo.FileID
+			// animePhotoMap ham ishlatilayotgan bo'lsa:
+			if animePhotoMap == nil {
+				animePhotoMap = make(map[string]string)
+			}
 			animePhotoMap[code] = photo.FileID
 			infoMutex.Unlock()
 
-			// 2. JSONga saqlash
 			saveAnimePhotos()
 			go saveData()
 
-			// 3. Admin holatini boshqarish
 			adminMutex.Lock()
 			if state == "anime_photo" {
-				// AGAR YANGI ANIME BO'LSA: Videolarga o'tkazamiz
 				adminState[userID] = "anime_videos"
-
 				storageMutex.RLock()
 				videoCount := len(animeStorage[code])
 				storageMutex.RUnlock()
@@ -380,18 +398,16 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 				msg := tgbotapi.NewMessage(chatID, txt)
 				msg.ParseMode = "Markdown"
 				bot.Send(msg)
-
 			} else {
-				// AGAR FAQAT TAHRIRLASH BO'LSA: Holatni yopamiz
 				adminState[userID] = ""
 				bot.Send(tgbotapi.NewMessage(chatID, "✅ Anime muqovasi muvaffaqiyatli yangilandi!"))
 			}
 			adminMutex.Unlock()
-
-			return // MUHIM: Funksiyadan chiqamiz, pastdagi switch'ga kirmaydi
+			return
 		}
-	} // -------------------------------------
+	}
 
+	// 4. Maxsus holatlar (Broadcast, Schedule, Callback)
 	if state == "waiting_for_ad" || state == "confirm_ad" {
 		handleBroadcast(bot, update, adminState, broadcastCache, pendingRequests, &adminMutex, &requestMutex)
 		return
@@ -407,49 +423,42 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		return
 	}
 
-	if update.Message != nil {
-		handleMessage(bot, update)
-	}
-	switch state {
-	case "delete_anime_confirm_final":
-		// Bu yerda foydalanuvchi yuborgan text - bu o'chirilishi kerak bo'lgan anime kodi
-		code := strings.ToLower(strings.TrimSpace(text))
+	// 5. Admin State Handler (Switch mantiqini handleMessage'dan oldinga qo'yamiz)
+	if state != "" {
+		switch state {
+		case "delete_anime_confirm_final":
+			code := strings.ToLower(strings.TrimSpace(text))
+			infoMutex.RLock()
+			name, exists := animeInfo[code]
+			infoMutex.RUnlock()
 
-		// 1. Kod mavjudligini tekshiramiz
-		infoMutex.RLock()
-		name, exists := animeInfo[code]
-		infoMutex.RUnlock()
+			if !exists {
+				bot.Send(tgbotapi.NewMessage(chatID, "❌ Bu kod bo‘yicha anime topilmadi. Bekor qilindi."))
+			} else {
+				infoMutex.Lock()
+				delete(animeInfo, code)
+				delete(animePhotos, code)
+				delete(animePhotoMap, code)
+				infoMutex.Unlock()
 
-		if !exists {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Bu kod bo‘yicha anime topilmadi. Bekor qilindi."))
+				storageMutex.Lock()
+				delete(animeStorage, code)
+				storageMutex.Unlock()
+
+				go saveData()
+				go saveAnimePhotos()
+				bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🗑 '%s' (%s) animeni bazadan butunlay o'chirib tashladim!", name, strings.ToUpper(code))))
+			}
 			adminMutex.Lock()
 			delete(adminState, userID)
 			adminMutex.Unlock()
-			return
+			return // Davom etmaymiz
 		}
+	}
 
-		// 2. 🔥 O'chirib tashlaymiz (Hech qanday /yes so'ramasdan)
-		infoMutex.Lock()
-		delete(animeInfo, code)
-		delete(animePhotos, code)
-		delete(animePhotoMap, code)
-		infoMutex.Unlock()
-
-		storageMutex.Lock()
-		delete(animeStorage, code)
-		storageMutex.Unlock()
-
-		// 3. 💾 Ma'lumotlarni saqlaymiz
-		go saveData()
-		go saveAnimePhotos()
-
-		// 4. Holatni yopamiz va xabar beramiz
-		adminMutex.Lock()
-		delete(adminState, userID)
-		adminMutex.Unlock()
-
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🗑 '%s' (%s) animeni bazadan butunlay o'chirib tashladim!", name, strings.ToUpper(code))))
-		return
+	// 6. Agar hech qanday maxsus holat bo'lmasa, oddiy xabar sifatida ko'ramiz
+	if update.Message != nil {
+		handleMessage(bot, update)
 	}
 }
 
@@ -522,6 +531,7 @@ func playItem(bot *tgbotapi.BotAPI, chatID int64, idx int, lastMessageID int, pa
 		bot.Send(msg)
 	}
 }
+
 func getReklamaMenu() tgbotapi.ReplyKeyboardMarkup {
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
@@ -538,7 +548,9 @@ func getReklamaMenu() tgbotapi.ReplyKeyboardMarkup {
 	keyboard.ResizeKeyboard = true
 	return keyboard
 }
+
 func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+	// ... mavjud kodlar (userID, chatID va h.k.) ...
 	code := strings.ToLower(strings.TrimSpace(update.Message.Text))
 	text := update.Message.Text
 	userID := update.Message.From.ID
@@ -546,13 +558,6 @@ func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	fmt.Printf("--- YANGI XABAR ---\nUser: %d\nText: %s\nState: %s\n------------------\n", userID, text, adminState[userID])
 	addUser(userID)
 	updateUserActivity(userID)
-	// 1. ADMIN PANEL (Adminlar uchun obuna shart emas)
-	/*	if text == "/admin" && admins[userID] {
-		msg := tgbotapi.NewMessage(chatID, "🛠 Admin panel")
-		msg.ReplyMarkup = adminMenu()
-		bot.Send(msg)
-		return
-	}*/
 	// 1. BUYRUQLAR (Har doim birinchi tekshiriladi)
 	if text == "/ad" && admins[userID] {
 		adminMutex.Lock()
@@ -563,8 +568,18 @@ func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		bot.Send(msg)
 		return
 	}
-	// 1. Avval foydalanuvchi adminmi yoki yo'qligini aniqlaymiz
+	var vUser VIPUser
+	var isVipExists bool
+	var isVipActive bool
+
 	isAdmin := admins[userID]
+
+	// 2. VIP holatini tekshirish
+	vipMutex.RLock()
+	vUser, isVipExists = vipUsers[userID] // ':=' emas, '=' ishlatiladi
+	vipMutex.RUnlock()
+	isVipActive = isVipExists && time.Now().Before(vUser.ExpireAt)
+	// 1. Avval foydalanuvchi adminmi yoki yo'qligini aniqlaymiz
 
 	// 2. TUGMALARNI TEKSHIRISH (Faqat adminlar uchun)
 	isMenuButton := false
@@ -574,7 +589,31 @@ func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 			isMenuButton = true
 		}
 	}
+	if !isAdmin && !isVipActive {
+		isMember, requiredChannelsMap := checkMembership(bot, userID, true)
+		if !isMember {
+			handleMembershipCheck(bot, chatID, requiredChannelsMap)
+			return
+		}
+	}
+	var uID int64
+	if update.Message != nil {
+		uID = update.Message.From.ID
+	} else if update.CallbackQuery != nil {
+		uID = update.CallbackQuery.From.ID
+	} else if update.ChatJoinRequest != nil {
+		uID = update.ChatJoinRequest.From.ID
+	}
+	// 2. 🛡️ BLOK TEKSHIRUVI (Hamma narsadan oldin)
+	blockMutex.RLock()
+	isBlocked := blockedUsers[uID]
+	blockMutex.RUnlock()
 
+	if isBlocked {
+		// Bloklangan bo'lsa, log yozamiz va 'continue' orqali siklni to'xtatamiz
+		log.Printf("🚫 [BLOK] %d ID li foydalanuvchi botni ishlatishga urindi.", uID)
+		//continue // <--- MUHIM: Pastdagi kodlar (handleUpdate, handleMessage) ishlamaydi
+	}
 	// 3. Agar bu admin tugmasi bo'lsa
 	if isMenuButton {
 		adminMutex.Lock()
@@ -584,26 +623,44 @@ func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	}
 
 	// 4. ADMIN STATE HANDLER (Agar admin biror narsa yozayotgan bo'lsa)
+	// 4. ADMIN STATE HANDLER (Agar admin biror narsa yozayotgan bo'lsa)
 	if isAdmin && adminState[userID] != "" {
 		handleAdminText(bot, update)
 		return
 	}
-	if !isAdmin {
-		// ---------------------------------------------------------
-		// 🔥 MAJBURIY OBUNA TEKSHIRUVI (Faqat oddiy foydalanuvchilar uchun)
-		// ---------------------------------------------------------
+
+	// ---------------------------------------------------------
+	// 🔥 TO'G'RILANGAN TEKSHIRUV: Admin va VIP-lar bu yerga kirmaydi
+	// ---------------------------------------------------------
+	if isMenuButton {
+		adminMutex.Lock()
+		delete(adminState, userID)
+		adminMutex.Unlock()
+		goto executeButton // Endi bu xato bermaydi!
+	}
+
+	// 4. ADMIN STATE HANDLER
+	if isAdmin && adminState[userID] != "" {
+		handleAdminText(bot, update)
+		return
+	}
+	if !isAdmin && !isVipActive {
 		isMember, requiredChannelsMap := checkMembership(bot, userID, true)
 		if !isMember {
 			handleMembershipCheck(bot, chatID, requiredChannelsMap)
+			return // Obuna bo'lmagan bo'lsa, pastdagi kodlar (qidiruv) ishlamaydi
+		}
+	}
+	// ---------------------------------------------------------
+
+	// Pastda esa qidiruv mantig'i davom etadi...
+executeButton:
+	// ... (qolgan kodlar)
+	if isAdmin {
+		if adminState[userID] != "" {
+			handleAdminText(bot, update)
 			return
 		}
-
-		// Bu yerda oddiy foydalanuvchining qidiruv mantig'ini chaqiring
-		// Masalan: handleUserSearch(bot, update)
-		// return // Admin switch'iga tushib ketmasligi uchun return qilamiz
-	}
-executeButton:
-	if isAdmin {
 		switch text {
 
 		case "✍️ anime tahrirlash":
@@ -874,76 +931,61 @@ executeButton:
 
 		}
 	}
-	// ---------------------------------------------------------
-	// 🔥 MAJBURIY OBUNA TEKSHIRUVI (ASOSIY O'ZGARISH SHU YERDA)
-	// ---------------------------------------------------------
-	isMember, requiredChannelsMap := checkMembership(bot, userID, true)
-	if !isMember {
-		handleMembershipCheck(bot, chatID, requiredChannelsMap)
-		return // Foydalanuvchi obuna bo'lmaguncha pastdagi kodlarga o'tmaydi
-	}
-	// ---------------------------------------------------------
-
-	updateUserActivity(userID)
-
-	//4. /start BUYRUG'I
+	// --- START KOMANDASI ---
 	if update.Message != nil && update.Message.IsCommand() && update.Message.Command() == "start" {
-		chatID := update.Message.Chat.ID
 
-		// 1. Argumentni olish (Deep-link: /start 1 bo'lsa, code = "1" bo'ladi)
 		code := update.Message.CommandArguments()
-
-		// Agar argument bo'sh bo'lsa (shunchaki /start bosilsa)
 		if code == "" {
 			msg := tgbotapi.NewMessage(chatID, "👋 Assalomu alaykum!\n\n🔎 Anime olish uchun kod kiriting:")
-			msg.ReplyMarkup = userMenu // Sizdagi asosiy menyu
+			msg.ReplyMarkup = userMenu
 			bot.Send(msg)
 			return
 		}
-
 		// 2. Bazadan ma'lumotni qidirish
 		storageMutex.RLock()
 		items, ok := animeStorage[code]
 		storageMutex.RUnlock()
 
 		if ok && len(items) > 0 {
-			// --- ANIMENI TAYYORLASH ---
-			name := items[0].Text
-
-			// AGAR nom bo'sh bo'lsa, kodni emas, massiv ichidagi boshqa elementdan qidirib ko'ramiz
-			if name == "" {
-				for _, item := range items {
-					if item.Text != "" {
-						name = item.Text
-						break
-					}
+			// --- NOMNI ANIQLASH (Kafolatlangan usul) ---
+			var name string
+			for _, item := range items {
+				if item.Text != "" {
+					name = item.Text
+					break
 				}
 			}
 
-			// AGAR hali ham bo'sh bo'lsa, "Noma'lum Anime" deb qo'yamiz (Kod emas!)
+			// Agar bazada nom bo'sh bo'lsa, "Noma'lum" emas, kodning o'zini ko'rsatamiz
 			if name == "" {
-				name = "Noma'lum"
+				name = "" + name
 			}
 
+			// 3. Foydalanuvchi joriy sahifasini saqlash
+			infoMutex.RLock()
+			name, hasName := animeInfo[code]
+			infoMutex.RUnlock()
+			if !hasName {
+				name = "No-name"
+			}
 			userPages[chatID] = &UserPage{
 				Name:  name,
 				Items: items,
 				Page:  0,
 			}
-
-			// 3. SIZNING FORMATINGIZ BO'YICHA CHIQARISH
+			// 4. Caption va Markup tayyorlash
 			markup := sendPageMenuMarkup(chatID)
-			caption := fmt.Sprintf("Anime nomi: %s\nJami qismlar: %d ta\n\n", name, len(items))
+			mainCaption := fmt.Sprintf("Anime nomi: %s\nJami qismlar: %d ta\n\n🍿 Maroqli hordiq!", name, len(items))
 
-			// Muqova rasmini tekshirish
+			// 5. Muqova rasmini tekshirish
 			infoMutex.RLock()
 			pID, hasPhoto := animePhotos[code]
 			infoMutex.RUnlock()
 
 			if hasPhoto && pID != "" {
-				// ✅ MUQOVA RASMI BILAN
+				// ✅ MUQOVA RASMI BILAN YUBORISH
 				msg := tgbotapi.NewPhoto(chatID, tgbotapi.FileID(pID))
-				msg.Caption = caption
+				msg.Caption = mainCaption
 				msg.ParseMode = "Markdown"
 				msg.ReplyMarkup = markup
 				bot.Send(msg)
@@ -957,9 +999,6 @@ executeButton:
 					msg := tgbotapi.NewVideo(chatID, tgbotapi.FileID(firstItem.FileID))
 					msg.Caption = qismCaption
 					msg.ReplyMarkup = markup
-					// Agar ProtectContent ishlamasa, boshqa usuldan foydalaning
-					msg.ReplyMarkup = markup
-					// Yoki contentni himoyalash uchun boshqa usul qo'llang
 					bot.Send(msg)
 				case "document":
 					msg := tgbotapi.NewDocument(chatID, tgbotapi.FileID(firstItem.FileID))
@@ -967,43 +1006,24 @@ executeButton:
 					msg.ReplyMarkup = markup
 					bot.Send(msg)
 				default:
-					msg := tgbotapi.NewMessage(chatID, caption)
+					msg := tgbotapi.NewMessage(chatID, mainCaption)
 					msg.ReplyMarkup = markup
 					bot.Send(msg)
 				}
 			}
+			fmt.Println("[LOG] Topilgan anime:", name, "| Kod:", code)
 		} else {
 			// Kod topilmasa
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Kechirasiz, bu kod bo'yicha hech narsa topilmadi."))
 		}
 		return
-
 	}
+
 	if text == "/stats" {
 		displayStats(bot, chatID)
 		return
 	}
-	// Xabar forward qilinganini tekshirish
-	if update.Message.ForwardFromChat != nil {
-		fChat := update.Message.ForwardFromChat
-		if fChat.Type == "channel" || fChat.Type == "supergroup" {
 
-			// Agar kanal maxfiy bo'lsa (Username yo'q bo'lsa)
-			if fChat.UserName == "" {
-				adminState[userID] = "add_private_link"
-				adminTempID[userID] = fChat.ID // <--- MUHIM: ID-ni bu yerda saqlaymiz
-
-				bot.Send(tgbotapi.NewMessage(chatID, "🔒 Bu maxfiy kanal. Endi kanalga ulanish havolasini (Invite Link) yuboring:"))
-			} else {
-				// Ochiq kanal bo'lsa
-				channels[fChat.ID] = fChat.UserName
-				go saveData()
-				bot.Send(tgbotapi.NewMessage(chatID, "✅ Ochiq kanal qo'shildi: @"+fChat.UserName))
-			}
-			return
-		}
-	}
-	// 5. MAXSUS BUYRUQLAR (Masalan: /clear_channels)
 	switch text {
 	case "/clear_channels":
 		if !adminIDs[userID] {
@@ -1016,8 +1036,6 @@ executeButton:
 		return
 	}
 
-	// 6. KOD KIRITSA (FOYDALANUVCHI)
-	// Bu yerda text != "/start" tekshiruvi shart emas, chunki tepada return qilingan
 	code = strings.ToLower(strings.TrimSpace(update.Message.Text)) // ✅ Faqat "="	// 1. Tugma bosilganda qidiruv rejimini yoqish
 	if update.Message.Text == "🔍 Rasm/Video orqali qidirish" {
 		userState[userID] = "wait_search"
@@ -1027,7 +1045,6 @@ executeButton:
 		return
 	}
 
-	// 2. Qidiruv rejimida rasm yoki video kelganini tekshirish
 	if update.Message != nil && userState[userID] == "wait_search" {
 		var finalFileID string
 
@@ -1141,7 +1158,6 @@ executeButton:
 		delete(userState, userID)
 		return
 	}
-	// Qidruv statistikasi
 	statsMutex.Lock()
 	searchStats[code]++
 	statsMutex.Unlock()
@@ -5309,20 +5325,20 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		go saveData()
 		return
 
-		//case "add_private_link":
-		//	link := update.Message.Text
-		//	if !strings.HasPrefix(link, "https://t.me/") {
-		//		bot.Send(tgbotapi.NewMessage(chatID, "❌ Noto'g'ri havola. Havola https://t.me/ bilan boshlanishi kerak."))
-		//		return
-		//	}
-		//
-		//	targetChatID := adminTempID[userID]
-		//	channels[targetChatID] = link // Maxfiy kanal uchun siz yuborgan havolani saqlaydi
-		//	go saveData()
-		//
-		//	bot.Send(tgbotapi.NewMessage(chatID, "✅ Maxfiy kanal va havola muvaffaqiyatli saqlandi!"))
-		//	adminState[userID] = ""
-		//	delete(adminTempID, userID)
+	//case "add_private_link":
+	//	link := update.Message.Text
+	//	if !strings.HasPrefix(link, "https://t.me/") {
+	//		bot.Send(tgbotapi.NewMessage(chatID, "❌ Noto'g'ri havola. Havola https://t.me/ bilan boshlanishi kerak."))
+	//		return
+	//	}
+	//
+	//	targetChatID := adminTempID[userID]
+	//	channels[targetChatID] = link // Maxfiy kanal uchun siz yuborgan havolani saqlaydi
+	//	go saveData()
+	//
+	//	bot.Send(tgbotapi.NewMessage(chatID, "✅ Maxfiy kanal va havola muvaffaqiyatli saqlandi!"))
+	//	adminState[userID] = ""
+	//	delete(adminTempID, userID)
 
 	case "edit_anime_code":
 		code := strings.ToLower(strings.TrimSpace(text))
@@ -5356,9 +5372,9 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		delete(adminState, userID)
 		bot.Send(msg)
 		return // ------------------ ADMIN: kontent qabul qilish (TO'G'RILANGAN) ------------------
-		// handleAdminText funksiyasi ichidagi switch blokiga qo'shiladi
+	// handleAdminText funksiyasi ichidagi switch blokiga qo'shiladi
 
-		// handleAdminText funksiyasi ichidagi switch blokida "anime_videos" holatining yangilangan qismi:
+	// handleAdminText funksiyasi ichidagi switch blokida "anime_videos" holatining yangilangan qismi:
 	case "anime_videos":
 		code := animeCodeTemp[userID]
 		chatID := update.Message.Chat.ID
@@ -5523,7 +5539,7 @@ func handleAdminText(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		}
 
 		// 3. Kodni avtomatik linkka aylantirish va saqlash
-		fullLink := "https://t.me/ergergtr_bot?start=" + code
+		fullLink := "https://t.me/Hentailar_uzbekcha_bot?start=" + code
 		userAdData[userID].AdLink = fullLink
 
 		// 4. Kanallar borligini tekshirish
