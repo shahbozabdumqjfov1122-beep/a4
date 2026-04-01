@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-var BOT_TOKEN = "8710688343:AAE_1wTWN9sLvAfSQkkfIrFJFr7tvZOTb9g"
+var BOT_TOKEN = "8739352086:AAFfzqHoZUYkR0nhqj4F9zDNTBGfOnXiqKs"
 
 //var BOT_TOKEN = "8445344788:AAG7YjdEYulqT2TyVTL_bczpBUuhdm7TwZo"
 
