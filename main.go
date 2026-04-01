@@ -18,15 +18,15 @@ import (
 	"time"
 )
 
-var BOT_TOKEN = "8534860816:AAEWVKW6o9CfEcCeD4UlDiAT7CjbJJfdL1A"
+var BOT_TOKEN = "8710688343:AAE_1wTWN9sLvAfSQkkfIrFJFr7tvZOTb9g"
 
 //var BOT_TOKEN = "8445344788:AAG7YjdEYulqT2TyVTL_bczpBUuhdm7TwZo"
 
 //var BOT_TOKEN = "8671204523:AAGmiKg1M8MvxdvwGW1Pp-LC7IK-ezwC8xA"
 
 const (
-	MAIN_ADMIN_ID int64 = 7518992824
-	MAIN_ADMIN_2  int64 = 7958470367 // Ikkinchi adminning haqiqiy ID sini shu yerga yozing
+	MAIN_ADMIN_ID int64 = 6500476560
+	MAIN_ADMIN_2  int64 = 7518992824 // Ikkinchi adminning haqiqiy ID sini shu yerga yozing
 )
 
 var admins = map[int64]bool{
