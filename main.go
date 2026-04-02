@@ -1603,13 +1603,13 @@ func showVIP(bot *tgbotapi.BotAPI, chatID int64) {
 	text := "💎 VIP Tariflar\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
 		"📅  1 haftalik — 5 000 so'm\n" +
-		"📅  1 oylik — 7 000 so'm\n" +
+		"📅  1 oylik — 10 000 so'm\n" +
 		"📅  3 oylik — 15 000 so'm\n" +
-		"📅  6 oylik — 20 000 so'm\n" +
-		"📆  1 yillik — 30 000 so'm\n\n" +
+		"📅  6 oylik — 30 000 so'm\n" +
+		"📆  1 yillik — 50 000 so'm\n\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━━\n" +
 		"💳 To‘lov uchun admin bilan bog‘laning:\n" +
-		"👉 @pain_0770"
+		"🖊 @reklama_qabulchi"
 	msg := tgbotapi.NewMessage(chatID, text)
 	bot.Send(msg)
 }
