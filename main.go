@@ -157,9 +157,7 @@ var (
 	uploadQueue    = make(chan UploadTask, 1000)
 	broadcastCache = make(map[int64]*tgbotapi.Message)
 )
-var currentUserID int64
-var isAdmin bool
-var isVipActive bool
+
 var animePhotoMap = make(map[string]string) // code -> fileID
 // ====== Kanallar
 var channels = make(map[int64]string) // channelID → channelUsername yoki info
@@ -1605,13 +1603,13 @@ func showVIP(bot *tgbotapi.BotAPI, chatID int64) {
 	text := "💎 VIP Tariflar\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
 		"📅  1 haftalik — 5 000 so'm\n" +
-		"📅  1 oylik — 15 000 so'm\n" +
-		"📅  3 oylik — 40 000 so'm\n" +
-		"📅  6 oylik — 70 000 so'm\n" +
-		"📆  1 yillik — 120 000 so'm\n\n" +
+		"📅  1 oylik — 7 000 so'm\n" +
+		"📅  3 oylik — 15 000 so'm\n" +
+		"📅  6 oylik — 20 000 so'm\n" +
+		"📆  1 yillik — 30 000 so'm\n\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━━\n" +
 		"💳 To‘lov uchun admin bilan bog‘laning:\n" +
-		"👉 @rasuljon9271"
+		"👉 @pain_0770"
 	msg := tgbotapi.NewMessage(chatID, text)
 	bot.Send(msg)
 }
